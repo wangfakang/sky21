@@ -1,0 +1,224 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <title>Sky21 by wangfakang</title>
+
+    <link rel="stylesheet" href="stylesheets/styles.css">
+    <link rel="stylesheet" href="stylesheets/github-light.css">
+    <script src="javascripts/scale.fix.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+    <!--[if lt IE 9]>
+    <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+  </head>
+  <body>
+    <div class="wrapper">
+      <header>
+        <h1 class="header">Sky21</h1>
+        <p class="header">nginx worker environment</p>
+
+        <ul>
+          <li class="download"><a class="buttons" href="https://github.com/wangfakang/sky21/zipball/master">Download ZIP</a></li>
+          <li class="download"><a class="buttons" href="https://github.com/wangfakang/sky21/tarball/master">Download TAR</a></li>
+          <li><a class="buttons github" href="https://github.com/wangfakang/sky21">View On GitHub</a></li>
+        </ul>
+
+        <p class="header">This project is maintained by <a class="header name" href="https://github.com/wangfakang">wangfakang</a></p>
+
+
+      </header>
+      <section>
+        <p><code>nginx 的环境变量的解析</code></p>
+
+<h1>
+<a id="一nginx-的环境变量的解析" class="anchor" href="#%E4%B8%80nginx-%E7%9A%84%E7%8E%AF%E5%A2%83%E5%8F%98%E9%87%8F%E7%9A%84%E8%A7%A3%E6%9E%90" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>一.nginx 的环境变量的解析</h1>
+
+<p>做了个实验发现，再启动nginx时设置的环境变量（在当前的shell环境）然后在子进程中去打印
+的时候就不见了。
+   然后看了下nginx的源码才知道，在启动worker进程的时候，会删除之前的一些环境变量。所以
+要在子进程中使用的话则要使用nginx指令env来进行设置。</p>
+
+<h1>
+<a id="二nginx环境变量设置指令" class="anchor" href="#%E4%BA%8Cnginx%E7%8E%AF%E5%A2%83%E5%8F%98%E9%87%8F%E8%AE%BE%E7%BD%AE%E6%8C%87%E4%BB%A4" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>二.nginx环境变量设置指令</h1>
+
+<div class="highlight highlight-source-shell"><pre>Syntax:    env variable[<span class="pl-k">=</span>value]<span class="pl-k">;</span>
+Default:    
+env TZ<span class="pl-k">;</span>
+Context:    main</pre></div>
+
+<p>如：<br>
+env PERL5LIB=/tmp;  注意：等号左右不可以有空格。</p>
+
+<h1>
+<a id="三代码分析" class="anchor" href="#%E4%B8%89%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>三.代码分析</h1>
+
+<div class="highlight highlight-source-c"><pre>进程初始化的时候：  
+<span class="pl-k">static</span> <span class="pl-k">void</span>
+<span class="pl-en">ngx_worker_process_init</span>(<span class="pl-c1">ngx_cycle_t</span> *cycle, <span class="pl-c1">ngx_int_t</span> worker)
+{
+    <span class="pl-c1">sigset_t</span>          set;
+    <span class="pl-c1">uint64_t</span>          cpu_affinity;
+    <span class="pl-c1">ngx_int_t</span>         n;
+    <span class="pl-c1">ngx_uint_t</span>        i;
+    <span class="pl-k">struct</span> <span class="pl-c1">rlimit</span>     rlmt;
+    <span class="pl-c1">ngx_core_conf_t</span>  *ccf;
+    <span class="pl-c1">ngx_listening_t</span>  *ls;
+　　<span class="pl-c">//配置一些环境变量</span>
+    <span class="pl-k">if</span> (<span class="pl-c1">ngx_set_environment</span>(cycle, <span class="pl-c1">NULL</span>) == <span class="pl-c1">NULL</span>) {
+        <span class="pl-c">/* fatal */</span>
+        <span class="pl-c1">exit</span>(<span class="pl-c1">2</span>);
+    }
+　　 <span class="pl-c">//获取配置信息</span>
+    ccf = (<span class="pl-c1">ngx_core_conf_t</span> *) <span class="pl-c1">ngx_get_conf</span>(cycle-&gt;conf_ctx, ngx_core_module);
+
+    <span class="pl-k">if</span> (worker &gt;= <span class="pl-c1">0</span> &amp;&amp; ccf-&gt;priority != <span class="pl-c1">0</span>) {
+        <span class="pl-k">if</span> (<span class="pl-c1">setpriority</span>(PRIO_PROCESS, <span class="pl-c1">0</span>, ccf-&gt;priority) == -<span class="pl-c1">1</span>) {
+            <span class="pl-c1">ngx_log_error</span>(NGX_LOG_ALERT, cycle-&gt;<span class="pl-c1">log</span>, ngx_errno,
+                          <span class="pl-s"><span class="pl-pds">"</span>setpriority(<span class="pl-c1">%d</span>) failed<span class="pl-pds">"</span></span>, ccf-&gt;priority);
+        }
+    }
+
+    ````
+}
+
+
+<span class="pl-k">char</span> **
+<span class="pl-en">ngx_set_environment</span>(<span class="pl-c1">ngx_cycle_t</span> *cycle, <span class="pl-c1">ngx_uint_t</span> *last)
+{
+    <span class="pl-k">char</span>             **p, **env;
+    <span class="pl-c1">ngx_str_t</span>         *var;
+    <span class="pl-c1">ngx_uint_t</span>         i, n;
+    <span class="pl-c1">ngx_core_conf_t</span>   *ccf;
+
+    ccf = (<span class="pl-c1">ngx_core_conf_t</span> *) <span class="pl-c1">ngx_get_conf</span>(cycle-&gt;conf_ctx, ngx_core_module);
+
+    <span class="pl-k">if</span> (last == <span class="pl-c1">NULL</span> &amp;&amp; ccf-&gt;environment) {
+        <span class="pl-k">return</span> ccf-&gt;environment;
+    }
+
+    var = ccf-&gt;env.<span class="pl-smi">elts</span>;
+
+    <span class="pl-k">for</span> (i = <span class="pl-c1">0</span>; i &lt; ccf-&gt;env.<span class="pl-smi">nelts</span>; i++) {
+        <span class="pl-k">if</span> (<span class="pl-c1">ngx_strcmp</span>(var[i].<span class="pl-smi">data</span>, <span class="pl-s"><span class="pl-pds">"</span>TZ<span class="pl-pds">"</span></span>) == <span class="pl-c1">0</span>
+            || <span class="pl-c1">ngx_strncmp</span>(var[i].<span class="pl-smi">data</span>, <span class="pl-s"><span class="pl-pds">"</span>TZ=<span class="pl-pds">"</span></span>, <span class="pl-c1">3</span>) == <span class="pl-c1">0</span>)
+        {
+            <span class="pl-k">goto</span> tz_found;
+        }
+    }
+
+    var = <span class="pl-c1">ngx_array_push</span>(&amp;ccf-&gt;env);
+    <span class="pl-k">if</span> (var == <span class="pl-c1">NULL</span>) {
+        <span class="pl-k">return</span> <span class="pl-c1">NULL</span>;
+    }
+
+    var-&gt;len = <span class="pl-c1">2</span>;
+    var-&gt;data = (<span class="pl-c1">u_char</span> *) <span class="pl-s"><span class="pl-pds">"</span>TZ<span class="pl-pds">"</span></span>;
+
+    var = ccf-&gt;env.<span class="pl-smi">elts</span>;
+
+tz_found:
+
+    n = <span class="pl-c1">0</span>;
+
+    <span class="pl-k">for</span> (i = <span class="pl-c1">0</span>; i &lt; ccf-&gt;env.<span class="pl-smi">nelts</span>; i++) {
+
+        <span class="pl-k">if</span> (var[i].<span class="pl-smi">data</span>[var[i].<span class="pl-smi">len</span>] == <span class="pl-s"><span class="pl-pds">'</span>=<span class="pl-pds">'</span></span>) {
+            n++;
+            <span class="pl-k">continue</span>;
+        }
+
+        <span class="pl-k">for</span> (p = ngx_os_environ; *p; p++) {
+
+            <span class="pl-k">if</span> (<span class="pl-c1">ngx_strncmp</span>(*p, var[i].<span class="pl-smi">data</span>, var[i].<span class="pl-smi">len</span>) == <span class="pl-c1">0</span>
+                &amp;&amp; (*p)[var[i].<span class="pl-smi">len</span>] == <span class="pl-s"><span class="pl-pds">'</span>=<span class="pl-pds">'</span></span>)
+            {
+                n++;
+                <span class="pl-k">break</span>;
+            }
+        }
+    }
+
+    <span class="pl-k">if</span> (last) {
+        env = <span class="pl-c1">ngx_alloc</span>((*last + n + <span class="pl-c1">1</span>) * <span class="pl-k">sizeof</span>(<span class="pl-k">char</span> *), cycle-&gt;<span class="pl-c1">log</span>);
+        *last = n;
+
+    } <span class="pl-k">else</span> {
+        env = <span class="pl-c1">ngx_palloc</span>(cycle-&gt;pool, (n + <span class="pl-c1">1</span>) * <span class="pl-k">sizeof</span>(<span class="pl-k">char</span> *));
+    }
+
+    <span class="pl-k">if</span> (env == <span class="pl-c1">NULL</span>) {
+        <span class="pl-k">return</span> <span class="pl-c1">NULL</span>;
+    }
+
+    n = <span class="pl-c1">0</span>;
+
+    <span class="pl-k">for</span> (i = <span class="pl-c1">0</span>; i &lt; ccf-&gt;env.<span class="pl-smi">nelts</span>; i++) {
+
+        <span class="pl-k">if</span> (var[i].<span class="pl-smi">data</span>[var[i].<span class="pl-smi">len</span>] == <span class="pl-s"><span class="pl-pds">'</span>=<span class="pl-pds">'</span></span>) {
+            env[n++] = (<span class="pl-k">char</span> *) var[i].<span class="pl-smi">data</span>;
+            <span class="pl-k">continue</span>;
+        }
+
+        <span class="pl-k">for</span> (p = ngx_os_environ; *p; p++) {
+
+            <span class="pl-k">if</span> (<span class="pl-c1">ngx_strncmp</span>(*p, var[i].<span class="pl-smi">data</span>, var[i].<span class="pl-smi">len</span>) == <span class="pl-c1">0</span>
+                &amp;&amp; (*p)[var[i].<span class="pl-smi">len</span>] == <span class="pl-s"><span class="pl-pds">'</span>=<span class="pl-pds">'</span></span>)
+            {
+                env[n++] = *p;
+                <span class="pl-k">break</span>;
+            }
+        }
+    }
+
+    env[n] = <span class="pl-c1">NULL</span>;
+
+    <span class="pl-k">if</span> (last == <span class="pl-c1">NULL</span>) {
+        ccf-&gt;environment = env;
+        environ = env;
+    }
+
+    <span class="pl-k">return</span> env;
+}
+
+
+
+</pre></div>
+
+<h1>
+<a id="欢迎一起交流学习-" class="anchor" href="#%E6%AC%A2%E8%BF%8E%E4%B8%80%E8%B5%B7%E4%BA%A4%E6%B5%81%E5%AD%A6%E4%B9%A0-" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>欢迎一起交流学习 </h1>
+
+<p>在使用中有任何问题，欢迎反馈给我，可以用以下联系方式跟我交流</p>
+
+<ul>
+<li>邮件(1031379296#qq.com, 把#换成@)</li>
+<li>QQ: 1031379296</li>
+<li>weibo: <a href="http://weibo.com/u/2786211992/home">@王发康</a>
+</li>
+</ul>
+
+<h1>
+<a id="thx" class="anchor" href="#thx" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Thx</h1>
+
+<ul>
+<li>chunshengsterATgmail.com</li>
+</ul>
+
+<h1>
+<a id="author" class="anchor" href="#author" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Author</h1>
+
+<ul>
+<li>Linux\nginx\golang\c\c++爱好者</li>
+<li>欢迎一起交流  一起学习# </li>
+<li>Others say good and Others good</li>
+</ul>
+      </section>
+      <footer>
+        <p><small>Hosted on <a href="https://pages.github.com">GitHub Pages</a> using the Dinky theme</small></p>
+      </footer>
+    </div>
+    <!--[if !IE]><script>fixScale(document);</script><![endif]-->
+		
+  </body>
+</html>
